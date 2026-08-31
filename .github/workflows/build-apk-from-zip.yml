@@ -1,0 +1,83 @@
+name: Build APK From Uploaded ZIP
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'shahriar-game-project.zip'
+      - '.github/workflows/build-apk-from-zip.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Prepare project folder
+        run: |
+          rm -rf extracted-project
+          mkdir extracted-project
+          unzip -q shahriar-game-project.zip -d extracted-project
+
+      - name: Detect project root
+        id: root
+        shell: bash
+        run: |
+          set -e
+          if [ -f extracted-project/package.json ]; then
+            echo "path=extracted-project" >> "$GITHUB_OUTPUT"
+          else
+            ROOT="$(find extracted-project -mindepth 1 -maxdepth 3 -type f -name package.json -printf '%h\n' | head -n 1)"
+            if [ -z "$ROOT" ]; then
+              echo "package.json not found inside ZIP"
+              find extracted-project -maxdepth 3 -type f | sort
+              exit 1
+            fi
+            echo "path=$ROOT" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Install dependencies
+        working-directory: ${{ steps.root.outputs.path }}
+        run: npm install --no-audit --no-fund
+
+      - name: Add Android platform if needed
+        working-directory: ${{ steps.root.outputs.path }}
+        run: |
+          if [ ! -d android ]; then
+            npx cap add android
+          fi
+
+      - name: Sync Capacitor
+        working-directory: ${{ steps.root.outputs.path }}
+        run: npx cap sync android
+
+      - name: Make Gradle executable
+        working-directory: ${{ steps.root.outputs.path }}/android
+        run: chmod +x gradlew
+
+      - name: Build Debug APK
+        working-directory: ${{ steps.root.outputs.path }}/android
+        run: ./gradlew assembleDebug
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: shahriar-game-debug-apk
+          path: ${{ steps.root.outputs.path }}/android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
